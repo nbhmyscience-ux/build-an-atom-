@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Build a beryllium atom</title>
+<style>
+  :root{
+    --navy:#0f1e3d;--green:#4a7c3f;--green-bg:#eef5ec;
+    --red:#c0392b;--sub:#5a6478;--line:#e4e7ee;--ring:#c7cede;
+    --proton:#FF3399;--neutron:#04CC89;--electron:#2947FB;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:#fff;overflow:hidden;
+    font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;color:var(--navy);
+    touch-action:none;-webkit-user-select:none;user-select:none;}
+  #fit{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+  #stage{position:relative;width:1280px;height:720px;transform-origin:center center;flex-shrink:0;}
+
+  h1{position:absolute;left:60px;top:34px;margin:0;font-size:34px;font-weight:700;}
+  #resetBtn{position:absolute;right:60px;top:34px;font:inherit;font-size:20px;font-weight:600;
+    color:var(--navy);background:#fff;border:2px solid var(--line);border-radius:10px;padding:8px 22px;cursor:pointer;}
+  #resetBtn:hover{background:#f4f5f9;}
+
+  .ring{position:absolute;border:2px solid var(--ring);border-radius:50%;}
+  #nucleus{position:absolute;border:3px dashed #b9c2d6;border-radius:50%;transition:background .15s,border-color .15s;}
+  #nucleus .chip{position:absolute;width:50px;height:50px;font-size:22px;box-shadow:0 0 0 2px #fff;}
+  .slot{position:absolute;width:56px;height:56px;border:3px dashed #b9c2d6;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s;}
+  .hot{background:rgba(4,204,137,.12);border-color:var(--green)!important;}
+  .bad{background:rgba(192,57,43,.12);border-color:var(--red)!important;}
+  .filled{border-color:transparent!important;background:none!important;}
+
+  .chip{width:52px;height:52px;border-radius:50%;color:#fff;font-weight:700;font-size:24px;
+    display:flex;align-items:center;justify-content:center;line-height:1;}
+  .pop{animation:pop .25s ease-out;}
+  @keyframes pop{0%{transform:scale(.6)}70%{transform:scale(1.12)}100%{transform:scale(1)}}
+
+  #tray{position:absolute;left:840px;top:150px;width:380px;display:flex;flex-direction:column;gap:22px;}
+  .item{display:flex;align-items:center;gap:18px;height:110px;padding:0 22px;border:2px solid var(--line);
+    border-radius:14px;background:#f7f8fb;font-size:26px;font-weight:600;cursor:grab;touch-action:none;}
+  .item .chip{width:64px;height:64px;font-size:30px;flex-shrink:0;}
+  .item .left{margin-left:auto;font-size:19px;font-weight:600;color:var(--sub);}
+  .item.used{opacity:.25;pointer-events:none;}
+  .item.lifted{opacity:.4;}
+
+  #status{position:absolute;left:60px;top:664px;width:780px;font-size:20px;color:var(--sub);}
+  #status.ok{color:var(--green);font-weight:700;}
+  #status.err{color:var(--red);font-weight:600;}
+
+  #ghost{position:fixed;left:0;top:0;pointer-events:none;z-index:10;display:none;
+    border-radius:50%;box-shadow:0 6px 18px rgba(15,30,61,.3);}
+  #ghost.back{transition:transform .3s ease;}
+  @media (prefers-reduced-motion:reduce){.pop{animation:none}#ghost.back{transition:none}}
+</style>
+</head>
+<body>
+<div id="fit"><div id="stage">
+  <h1>Build a beryllium atom</h1>
+  <button id="resetBtn" type="button">Reset</button>
+  <div id="atom"></div>
+  <div id="tray"></div>
+  <div id="status">Drag each particle to where it belongs in the atom.</div>
+</div></div>
+<div id="ghost" class="chip"></div>
+
+<script>
+/* ---------- layout (design coordinates, 1280 x 720) ---------- */
+const CX = 410, CY = 380, R_INNER = 160, R_OUTER = 260, NUC_R = 92, SLOT = 56;
+const COLORS = {proton:'var(--proton)', neutron:'var(--neutron)', electron:'var(--electron)'};
+const SYMBOLS = {proton:'+', neutron:'0', electron:'\u2212'};
+const NAMES = {proton:'Proton', neutron:'Neutron', electron:'Electron'};
+const COUNTS = {proton:4, neutron:5, electron:4}; // beryllium: 4p, 5n, 4e (2,2)
+// nucleus spots in a mixed 3x3 pack: n p n / p n p / n p n
+const NUC_SPOTS = [];
+['neutron','proton','neutron','proton','neutron','proton','neutron','proton','neutron'].forEach((t,i)=>{
+  NUC_SPOTS.push({type:t, dx:((i%3)-1)*44, dy:(Math.floor(i/3)-1)*44});
+});
+let left = {};
+const SLOTS = [ // 2 on the inner shell, 2 on the outer shell
+  {x:CX, y:CY-R_INNER}, {x:CX, y:CY+R_INNER},
+  {x:CX-R_OUTER, y:CY}, {x:CX+R_OUTER, y:CY}
+];
+
+const stage = document.getElementById('stage');
+const atom = document.getElementById('atom');
+const tray = document.getElementById('tray');
+const statusEl = document.getElementById('status');
+const ghost = document.getElementById('ghost');
+let scale = 1;
+
+function place(el, x, y, w, h){
+  el.style.left = (x - w/2) + 'px'; el.style.top = (y - h/2) + 'px';
+  el.style.width = w + 'px'; el.style.height = h + 'px';
+}
+function makeChip(type){
+  const c = document.createElement('div');
+  c.className = 'chip';
+  c.style.background = COLORS[type];
+  c.textContent = SYMBOLS[type];
+  return c;
+}
+
+function build(){
+  atom.innerHTML = ''; tray.innerHTML = '';
+  NUC_SPOTS.forEach(s=>s.used = false);
+  [R_OUTER, R_INNER].forEach(r=>{
+    const ring = document.createElement('div'); ring.className = 'ring';
+    place(ring, CX, CY, r*2, r*2); atom.appendChild(ring);
+  });
+  const nuc = document.createElement('div'); nuc.id = 'nucleus';
+  nuc.dataset.accepts = 'nucleus';
+  place(nuc, CX, CY, NUC_R*2, NUC_R*2); atom.appendChild(nuc);
+  SLOTS.forEach(s=>{
+    const slot = document.createElement('div'); slot.className = 'slot';
+    slot.dataset.accepts = 'electron';
+    place(slot, s.x, s.y, SLOT, SLOT); atom.appendChild(slot);
+  });
+  left = {...COUNTS};
+  ['proton','neutron','electron'].forEach(type=>{
+    const item = document.createElement('div');
+    item.className = 'item'; item.dataset.type = type;
+    item.appendChild(makeChip(type));
+    item.appendChild(document.createTextNode(NAMES[type] + 's'));
+    const n = document.createElement('span'); n.className = 'left'; item.appendChild(n);
+    item.addEventListener('pointerdown', startDrag);
+    tray.appendChild(item);
+  });
+  updateTray();
+  setStatus('Drag each particle to where it belongs in the atom.', '');
+}
+
+function updateTray(){
+  tray.querySelectorAll('.item').forEach(item=>{
+    const n = left[item.dataset.type];
+    item.querySelector('.left').textContent = n + ' left';
+    item.classList.toggle('used', n === 0);
+  });
+}
+function nucleusCount(){ return atom.querySelector('#nucleus').querySelectorAll('.chip').length; }
+function setStatus(text, cls){ statusEl.textContent = text; statusEl.className = cls; }
+
+/* ---------- scale the 1280x720 stage to fit any frame (slide, browser, whiteboard) ---------- */
+function fit(){
+  scale = Math.min(window.innerWidth/1280, window.innerHeight/720);
+  stage.style.transform = 'scale(' + scale + ')';
+}
+window.addEventListener('resize', fit);
+
+/* ---------- pointer-based dragging: mouse, touch and pen ---------- */
+let drag = null;
+
+function targets(){
+  return [...atom.querySelectorAll('#nucleus, .slot')].filter(t=>{
+    if(t.id === 'nucleus') return nucleusCount() < 9;
+    return !t.classList.contains('filled');
+  });
+}
+function targetAt(px, py){
+  let best = null, bestD = Infinity;
+  targets().forEach(t=>{
+    const r = t.getBoundingClientRect();
+    const cx = r.left + r.width/2, cy = r.top + r.height/2;
+    const d = Math.hypot(px-cx, py-cy);
+    const reach = r.width/2 + 30*scale; // a little forgiveness for fingers
+    if(d < reach && d < bestD){ best = t; bestD = d; }
+  });
+  return best;
+}
+function moveGhost(px, py){
+  const s = 56*scale;
+  ghost.style.width = s+'px'; ghost.style.height = s+'px';
+  ghost.style.fontSize = (24*scale)+'px';
+  ghost.style.transform = 'translate(' + (px - s/2) + 'px,' + (py - s/2) + 'px)';
+}
+function clearHighlights(){ atom.querySelectorAll('.hot,.bad').forEach(el=>el.classList.remove('hot','bad')); }
+
+function startDrag(e){
+  const item = e.currentTarget;
+  if(item.classList.contains('used') || drag) return;
+  e.preventDefault();
+  item.setPointerCapture(e.pointerId);
+  const type = item.dataset.type;
+  drag = {item, type, id:e.pointerId};
+  item.classList.add('lifted');
+  ghost.classList.remove('back');
+  ghost.style.background = COLORS[type];
+  ghost.textContent = SYMBOLS[type];
+  ghost.style.display = 'flex';
+  moveGhost(e.clientX, e.clientY);
+  item.addEventListener('pointermove', onMove);
+  item.addEventListener('pointerup', onUp);
+  item.addEventListener('pointercancel', onCancel);
+}
+function onMove(e){
+  if(!drag || e.pointerId !== drag.id) return;
+  moveGhost(e.clientX, e.clientY);
+  clearHighlights();
+  const t = targetAt(e.clientX, e.clientY);
+  if(t) t.classList.add(fits(t) ? 'hot' : 'bad');
+}
+function fits(t){
+  return t.dataset.accepts === 'nucleus' ? drag.type !== 'electron' : drag.type === 'electron';
+}
+function endListeners(item){
+  item.removeEventListener('pointermove', onMove);
+  item.removeEventListener('pointerup', onUp);
+  item.removeEventListener('pointercancel', onCancel);
+}
+function onUp(e){
+  if(!drag || e.pointerId !== drag.id) return;
+  const {item, type} = drag;
+  endListeners(item);
+  clearHighlights();
+  const t = targetAt(e.clientX, e.clientY);
+  if(t && fits(t)){
+    const chip = makeChip(type); chip.classList.add('pop');
+    if(t.id === 'nucleus'){
+      const spot = NUC_SPOTS.find(s=>s.type === type && !s.used);
+      spot.used = true;
+      place(chip, NUC_R - 3 + spot.dx, NUC_R - 3 + spot.dy, 50, 50);
+      t.appendChild(chip);
+      if(nucleusCount() >= 9) t.classList.add('filled');
+    } else { t.appendChild(chip); t.classList.add('filled'); }
+    left[type]--; updateTray();
+    item.classList.remove('lifted');
+    ghost.style.display = 'none';
+    drag = null;
+    if(left.proton + left.neutron + left.electron === 0){
+      setStatus('Beryllium atom complete: 4 protons, 5 neutrons, 4 electrons (2,2).', 'ok');
+    } else {
+      setStatus('Correct, ' + NAMES[type].toLowerCase() + 's belong there.', 'ok');
+    }
+    return;
+  }
+  if(t){
+    setStatus(type === 'electron'
+      ? 'Electrons are not in the nucleus. They go in the shells.'
+      : NAMES[type] + 's are not in the shells. They go in the nucleus.', 'err');
+  }
+  flyBack();
+}
+function onCancel(){ if(drag){ endListeners(drag.item); clearHighlights(); flyBack(); } }
+function flyBack(){
+  const {item} = drag;
+  const r = item.querySelector('.chip').getBoundingClientRect();
+  ghost.classList.add('back');
+  moveGhost(r.left + r.width/2, r.top + r.height/2);
+  setTimeout(()=>{ ghost.style.display = 'none'; ghost.classList.remove('back'); item.classList.remove('lifted'); }, 300);
+  drag = null;
+}
+
+document.getElementById('resetBtn').addEventListener('click', build);
+build(); fit();
+</script>
+</body>
+</html>
